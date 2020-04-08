@@ -1,0 +1,13 @@
+id: packer-ova
+file_client: local
+failhard: True
+
+file_roots:
+  base:
+    - /srv/salt/
+
+pillar_roots:
+  base:
+    - /srv/pillars/
+
+top_file_merging_strategy: merge_all

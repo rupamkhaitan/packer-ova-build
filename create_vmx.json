@@ -1,0 +1,146 @@
+{
+  "description": "Create VMX image for OVA installation.",
+  "min_packer_version": "1.4.5",
+  "variables": {
+    "bootstrap_args": "-x python3",
+    "build_memory": "1024",
+    "disk_data": "90000",
+    "disk_system": "30000",
+    "headless": "true",
+    "hostname": "ubuntu",
+    "iso_url": "",
+    "iso_checksum": "",
+    "salt_version": "2019.2",
+    "ssh_username": "ubuntu",
+    "ssh_password": "ubuntu",
+    "target": "ova",
+    "type": "",
+    "os_code": "xenial",
+    "version": "0.0"
+  },
+  "builders": [
+    {
+      "type": "vmware-iso",
+      "boot_wait": "15s",
+      "disk_size": "{{ user `disk_system` }}",
+      "disk_additional_size": [
+        "{{ user `disk_data` }}"
+      ],
+      "guest_os_type": "ubuntu-64",
+      "iso_url": "{{user `iso_url`}}",
+      "iso_checksum": "{{user `iso_checksum`}}",
+      "iso_checksum_type": "md5",
+      "ssh_username": "{{user `ssh_username`}}",
+      "ssh_password": "{{user `ssh_password`}}",
+      "ssh_pty": "true",
+      "ssh_wait_timeout": "60m",
+      "headless": "{{user `headless`}}",
+      "http_directory" : "preseeds",
+      "http_port_min" : 9001,
+      "http_port_max" : 9001,
+      "output_directory" : "{{ user `output_dir` }}",
+      "vm_name" : "ubuntu_{{ user `version` }}_amd64",
+      "vmdk_name" : "ubuntu",
+      "vmx_data": {
+        "memsize": "{{ user `build_memory` }}",
+        "tools.syncTime": "0",
+        "tools.upgrade.policy": "manual"
+      },
+      "shutdown_command": "echo {{user `ssh_password`}} | sudo -S shutdown -P now",
+      "boot_command": [
+        "<esc><f6><esc>",
+        "<bs><bs><bs><bs><bs><bs><bs><bs><bs><bs>",
+        "<bs><bs><bs><bs><bs><bs><bs><bs><bs><bs>",
+        "<bs><bs><bs><bs><bs><bs><bs><bs><bs><bs>",
+        "<bs><bs><bs><bs><bs><bs><bs><bs><bs><bs>",
+        "<bs><bs><bs><bs><bs><bs><bs><bs><bs><bs>",
+        "<bs><bs><bs><bs><bs><bs><bs><bs><bs><bs>",
+        "<bs><bs><bs><bs><bs><bs><bs><bs><bs><bs>",
+        "<bs><bs><bs><bs><bs><bs><bs><bs><bs><bs>",
+        "<bs><bs><bs>",
+        "/install/vmlinuz noapic ",
+        "initrd=/install/initrd.gz ",
+        "auto=true ",
+        "net.ifnames=0 netcfg/choose_interface=eth0 ", 
+        "hostname={{user `hostname`}} ",
+        "priority=critical ",
+        "preseed/url=http://{{ .HTTPIP }}:{{ .HTTPPort }}/preseed.cfg ",
+        "<wait><enter>"
+      ]
+    }
+  ],
+  "provisioners":[
+    {
+      "type": "shell",
+      "execute_command": "echo {{user `ssh_password`}} | {{ .Vars }} sudo -E -S sh '{{ .Path }}'",
+      "inline": [
+        "echo 'Configuring sudo for {{user `ssh_username`}}'",
+        "echo '%{{user `ssh_username`}}  ALL=(ALL)  NOPASSWD: ALL' | tee -a /etc/sudoers"
+      ]
+    },
+    {
+      "type": "shell",
+      "expect_disconnect": "true",
+      "inline": [
+        "echo 'Saving build version to /etc/salt/grains'",
+        "sudo mkdir -p /etc/salt",
+        "echo ami: {{user `version`}} | sudo tee --append /etc/salt/grains",
+        "echo target: {{user `target`}} | sudo tee --append /etc/salt/grains",
+        "sudo apt-get update",
+        "sudo DEBIAN_FRONTEND=noninteractive apt-get -fuy -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' dist-upgrade",
+        "echo 'Installing curl to allow salt provisioning'",
+        "sudo DEBIAN_FRONTEND=noninteractive apt-get -y install curl",
+        "echo 'Rebooting the system now...'",
+        "sudo reboot now"
+      ]
+    },{
+      "type": "shell",
+      "pause_before": "30s",
+      "inline": [
+        "sudo sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT=.*$/GRUB_CMDLINE_LINUX_DEFAULT=\"quiet splash\"/' /etc/default/grub",
+        "sudo update-grub",
+        "echo 'Creating temporary directories for salt tree'",
+        "mkdir /tmp/states",
+        "mkdir /tmp/pillars"
+      ]
+    },{
+      "type": "salt-masterless",
+      "local_state_tree": "./salt/states/base",
+      "local_pillar_roots": "./salt/pillars/base",
+      "bootstrap_args": "{{user `bootstrap_args`}} stable {{user `salt_version`}}",
+      "minion_config": "./files/minion-{{user `type`}}"
+    },{
+      "type": "file",
+      "source": "./salt/pillars",
+      "destination": "/tmp/pillars"
+    },{
+      "type": "file",
+      "source": "./salt/states",
+      "destination": "/tmp/states"
+    },{
+      "type": "shell",
+      "expect_disconnect": "true",
+      "inline": [
+        "echo 'Configuring salt environment'",
+        "mv /tmp/states/* /srv/salt",
+        "mv /tmp/pillars/* /srv/pillars",
+        "sudo salt-call --local state.highstate -l info --retcode-passthrough",
+        "echo {{user `version`}} | sudo tee --append /srv/etc/version",
+        "echo 'Cleaning up salt install'",
+        "sudo rm -rf /srv/pillars",
+        "sudo rm -rf /srv/salt",
+        "sudo rm -rf /var/log/salt",
+        "sudo rm -rf /var/cache/salt",
+        "sudo apt-get -q -y purge salt-minion",
+        "sudo apt-get -q -y purge salt-common",
+        "sudo apt-get -q -y purge make",
+        "sudo apt-get -q -y purge gcc",
+        "sudo apt-get -q -y purge libc6-dev",
+        "sudo apt-get -q -y purge git",
+        "sudo apt-get -q -y --purge autoremove",
+        "sudo purge-old-kernels -q -y --keep 1",
+        "sudo apt-get clean"
+      ]
+    }
+  ]
+}
